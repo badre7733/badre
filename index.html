@@ -1,165 +1,106 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <title>Traffic Racer - Offline (funciona sin servidor)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    html,body{height:100%;margin:0;background:#0b0b0b;overflow:hidden;font-family:Inter,Arial;}
-    #overlay{
-      position:absolute;left:12px;top:12px;z-index:30;background:rgba(0,0,0,0.45);
-      color:#fff;padding:8px 12px;border-radius:8px;font-size:14px;
-    }
-    #overlay .small{font-size:12px;opacity:0.9}
-    #hud { position:absolute; right:12px; top:12px; z-index:30; color:#fff; background:rgba(0,0,0,0.35); padding:8px 10px; border-radius:8px; }
-    button{padding:6px 10px;border-radius:6px;border:none;background:#1f6feb;color:#fff;cursor:pointer}
-    #gameover{ position:absolute; inset:0; display:none; align-items:center; justify-content:center; z-index:40; background:rgba(0,0,0,0.6); }
-    #gameover .box{ background:#111;padding:18px;border-radius:10px;color:#fff; text-align:center; min-width:260px;}
-    #canvas{display:block;width:100vw;height:100vh}
-  </style>
+    <meta charset="UTF-8">
+    <title>Traffic Racer 3D</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; }
+    </style>
 </head>
 <body>
-  <div id="overlay">
-    <div style="font-weight:700">Traffic Racer — Offline</div>
-    <div class="small">Controles: A / ← = izquierda • D / → = derecha • Espacio = reiniciar</div>
-  </div>
-  <div id="hud">Puntos: <span id="score">0</span></div>
-  <div id="gameover"><div class="box"><div style="font-weight:800;font-size:22px">¡CHOCASTE!</div><div style="margin-top:8px">Puntuación: <b id="finalScore">0</b></div><div style="margin-top:12px"><button id="btnRestart">Reintentar</button></div></div></div>
-  <canvas id="canvas"></canvas>
 
-  <!-- Cargamos Three.js (CDN). Si por alguna razón esto falla, el juego aún lo inicializa con WebGL disabled message -->
-  <script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+<script type="module">
 
-  <script>
-  // ---------- Comprobación WebGL ----------
-  if (!THREE.WEBGL.isWebGLAvailable()) {
-    document.body.innerHTML = '<div style="color:#fff;padding:40px;font-size:18px">Tu navegador no soporta WebGL o está desactivado. Intenta Chrome, Edge o Firefox actualizados.</div>';
-    throw new Error('WebGL no disponible');
-  }
+import * as THREE from "https://unpkg.com/three@0.159.0/build/three.module.js";
+import { GLTFLoader } from "https://unpkg.com/three@0.159.0/examples/jsm/loaders/GLTFLoader.js";
 
-  // ---------- Setup básico ----------
-  const canvas = document.getElementById('canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
+let scene, camera, renderer;
+let car;
+let obstacles = [];
+let speed = 0.2;
+let carX = 0;
 
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x121217);
+init();
+animate();
 
-  // Cámara
-  const camera = new THREE.PerspectiveCamera(55, window.innerWidth/window.innerHeight, 0.1, 1000);
-  camera.position.set(0, 6, -12);
+function init() {
 
-  // Luces
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x222233, 0.6);
-  hemi.position.set(0,50,0);
-  scene.add(hemi);
-  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
-  dir.position.set(-10,20,10);
-  dir.castShadow = true;
-  scene.add(dir);
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
 
-  // Suelo / carretera
-  const roadWidth = 6;
-  const roadLength = 1000;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(roadWidth, roadLength), new THREE.MeshStandardMaterial({color:0x121212, roughness:0.95}));
-  ground.rotation.x = -Math.PI/2;
-  ground.position.z = -roadLength/2 + 20;
-  ground.receiveShadow = true;
-  scene.add(ground);
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, -12);
+    camera.lookAt(0, 0, 0);
 
-  // Lineas centrales (segmentadas para efecto infinito)
-  const lines = [];
-  const lineGeom = new THREE.PlaneGeometry(0.2, 6);
-  const lineMat = new THREE.MeshBasicMaterial({color:0xfff3b0});
-  for (let i = -40; i < 200; i += 8) {
-    const l = new THREE.Mesh(lineGeom, lineMat);
-    l.rotation.x = -Math.PI/2;
-    l.position.set(0, 0.01, i);
-    scene.add(l);
-    lines.push(l);
-  }
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-  // BORDES carreteras (visual)
-  const borderLeft = new THREE.Mesh(new THREE.PlaneGeometry(0.4, roadLength), new THREE.MeshBasicMaterial({color:0x666666}));
-  borderLeft.rotation.x = -Math.PI/2; borderLeft.position.set(-roadWidth/2 - 0.2, 0.02, 0);
-  const borderRight = borderLeft.clone(); borderRight.position.x = roadWidth/2 + 0.2;
-  scene.add(borderLeft, borderRight);
+    const light = new THREE.DirectionalLight(0xffffff, 2);
+    light.position.set(5, 10, -5);
+    scene.add(light);
 
-  // ------------ Player (simple caja) ------------
-  const playerGeo = new THREE.BoxGeometry(2.2, 0.9, 4.0);
-  const playerMat = new THREE.MeshStandardMaterial({color:0xff3333, metalness:0.3, roughness:0.5});
-  const player = new THREE.Mesh(playerGeo, playerMat);
-  player.position.set(0, 0.45, 0);
-  player.castShadow = true;
-  scene.add(player);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-  // Variables del juego
-  const lanes = [-2.2, 0, 2.2]; // posiciones X
-  let playerTargetX = 0;
-  let score = 0;
-  let running = true;
-  let speed = 0.25; // movimiento del mundo (parallax)
-  const obstacles = []; // array de Mesh
-  const maxObstacles = 10;
+    // Carretera
+    const roadGeo = new THREE.PlaneGeometry(6, 2000);
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x303030 });
+    const road = new THREE.Mesh(roadGeo, roadMat);
+    road.rotation.x = -Math.PI / 2;
+    scene.add(road);
 
-  // Crear obstáculos (cubo) y colocarlos atrás
-  function spawnInitialObstacles() {
-    for (let i = 0; i < maxObstacles; i++) {
-      const g = new THREE.BoxGeometry(1.6, 1.2, 3.2);
-      const m = new THREE.MeshStandardMaterial({color: new THREE.Color().setHSL(Math.random(), 0.7, 0.5)});
-      const obs = new THREE.Mesh(g,m);
-      obs.castShadow = true;
-      resetObstaclePosition(obs, - (50 + i*20 + Math.random()*40));
-      scene.add(obs);
-      obstacles.push(obs);
+    // Cargar coche
+    const loader = new GLTFLoader();
+    loader.load(
+        "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/SimpleCar/glTF/SimpleCar.gltf",
+        (gltf) => {
+            car = gltf.scene;
+            car.scale.set(0.9, 0.9, 0.9);
+            car.position.set(0, 0.4, 0);
+            scene.add(car);
+        }
+    );
+
+    // Obstáculos
+    for (let i = 0; i < 10; i++) {
+        const box = new THREE.Mesh(
+            new THREE.BoxGeometry(1, 1, 2),
+            new THREE.MeshStandardMaterial({ color: 0xff0000 })
+        );
+        box.position.set((Math.random()*4)-2, 0.5, -50 - i*40);
+        scene.add(box);
+        obstacles.push(box);
     }
-  }
 
-  function resetObstaclePosition(obs, z = -200) {
-    const lane = lanes[Math.floor(Math.random() * lanes.length)];
-    obs.position.set(lane, 0.6, z);
-  }
+    // Teclado
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowLeft" || e.key === "a") carX -= 0.3;
+        if (e.key === "ArrowRight" || e.key === "d") carX += 0.3;
+    });
 
-  spawnInitialObstacles();
+}
 
-  // Bounding boxes
-  const playerBox = new THREE.Box3();
-  const tempBox = new THREE.Box3();
+function animate() {
+    requestAnimationFrame(animate);
 
-  // Controles teclado
-  const input = { left:false, right:false };
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') input.left = true;
-    if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') input.right = true;
-    if (e.code === 'Space') restartGame();
-  });
-  window.addEventListener('keyup', (e) => {
-    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') input.left = false;
-    if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') input.right = false;
-  });
+    if (car) {
+        carX = THREE.MathUtils.clamp(carX, -2.2, 2.2);
+        car.position.x += (carX - car.position.x) * 0.2;
+    }
 
-  // Touch: tap left/right halves
-  window.addEventListener('pointerdown', (e) => {
-    const mid = window.innerWidth/2;
-    if (e.clientX < mid) moveLeft(); else moveRight();
-  });
+    // Obstáculos
+    for (let obs of obstacles) {
+        obs.position.z += speed + 0.1;
+        if (obs.position.z > 5) {
+            obs.position.z = -200;
+            obs.position.x = (Math.random()*4)-2;
+        }
+    }
 
-  function moveLeft(){ playerTargetX = Math.max(-roadWidth/2 + 0.8, playerTargetX - 2.2); }
-  function moveRight(){ playerTargetX = Math.min(roadWidth/2 - 0.8, playerTargetX + 2.2); }
+    renderer.render(scene, camera);
+}
 
-  // HUD
-  const scoreEl = document.getElementById('score');
-  const goEl = document.getElementById('gameover');
-  const finalScoreEl = document.getElementById('finalScore');
-  document.getElementById('btnRestart').addEventListener('click', () => { goEl.style.display = 'none'; restartGame(); });
+</script>
 
-  // Debug info en consola
-  console.log('Traffic Racer Offline: iniciado. No se requieren servidores ni Python.');
-  console.log('Si ves pantalla negra: abre F12 -> Consola y copia cualquier error aquí.');
-
-  // Resize handler
-  window.addEventListener('resize', onResize);
-  function onResize(){
-    renderer.setSize(window.innerWidt
+</body>
+</html>
