@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Traffic Racer - Three.js (Ferrari model)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body { height:100%; margin:0; overflow:hidden; background:#111; color:#fff; font-family:system-ui,Segoe UI,Roboto,Arial; }
+    #overlay {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(0,0,0,0.45); padding:10px 12px; border-radius:8px;
+      backdrop-filter: blur(4px);
+    }
+    #overlay button { margin-left:8px; }
+    #canvas { display:block; width:100vw; height:100vh; }
+    .hint { opacity:0.8; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div>
+        <div style="font-weight:700">Traffic Racer</div>
+        <div class="hint">Flechas / A D para mover | Barra para reiniciar</div>
+      </div>
+      <div style="margin-left:12px">Puntos: <span id="score">0</span></div>
+      <button id="restart">Reiniciar</button>
+    </div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <!-- Usamos módulos ES para importar three + loaders desde CDN -->
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.152.2/examples/jsm/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
+    import { DRACOLoader } from 'https://unpkg.com/three@0.152.2/examples/jsm/loaders/DRACOLoader.js';
+
+    // --- CONFIG ---
+    const MODEL_URL = 'https://threejs.org/examples/models/gltf/ferrari.glb'; // modelo usado en el ejemplo oficial. :contentReference[oaicite:1]{index=1}
+    const canvas = document.getElementById('canvas');
+    const scoreEl = document.getElementById('score');
+    const restartBtn = document.getElementById('restart');
+
+    // --- Escena, cámara, renderer ---
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x222222, 10, 120);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 500);
+    camera.position.set(0, 6, 12);
+
+    // --- Luzes ---
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+    hemi.position.set(0, 50, 0);
+    scene.add(hemi);
+
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(-10, 20, 10);
+    dir.castShadow = true;
+    dir.shadow.camera.left = -30; dir.shadow.camera.right = 30;
+    dir.shadow.camera.top = 30; dir.shadow.camera.bottom = -30;
+    dir.shadow.mapSize.set(2048,2048);
+    scene.add(dir);
+
+    // --- Suelo / carretera ---
+    const roadWidth = 6;
+    const roadLength = 200;
+    const roadGeom = new THREE.PlaneGeometry(roadWidth, roadLength);
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness:0.1, roughness:0.8 });
+    const road = new THREE.Mesh(roadGeom, roadMat);
+    road.rotation.x = -Math.PI/2;
+    road.position.z = -roadLength/2 + 10;
+    road.receiveShadow = true;
+    scene.add(road);
+
+    // líneas de la carretera (centrales)
+    const lineGeom = new THREE.PlaneGeometry(0.2, 10);
+    const lineMat = new THREE.MeshBasicMaterial({ color:0xffff99 });
+    function makeLine(z) {
+      const l = new THREE.Mesh(lineGeom, lineMat);
+      l.rotation.x = -Math.PI/2;
+      l.position.set(0, 0.01, z);
+      scene.add(l);
+      return l;
+    }
+    const lines = [];
+    for (let i = -10; i < 120; i += 12) lines.push(makeLine(i));
+
+    // --- Variables del juego ---
+    let player, playerBBox;
+    const traffic = []; // array de objetos {mesh, bbox, lane}
+    const lanes = [-2.0, 0.0, 2.0]; // X positions
+    let modelTemplate = null;
+    let speed = 0.6;      // velocidad de movimiento del mundo (mayor = más rápido tráfico)
+    let laneSpeedMultiplier = 1;
+    let score = 0;
+    let running = true;
+
+    // Controles
+    const input = { left:false, right:false };
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft' || e.key.toLowerCase()==='a') input.left = true;
+      if (e.key === 'ArrowRight' || e.key.toLowerCase()==='d') input.right = true;
+      if (e.code === 'Space') resetGame();
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'ArrowLeft' || e.key.toLowerCase()==='a') input.left = false;
+      if (e.key === 'ArrowRight' || e.key.toLowerCase()==='d') input.right = false;
+    });
+    restartBtn.addEventListener('click', resetGame);
+
+    // Reconstruir BBox util
+    function computeBBox(mesh) {
+      const box = new THREE.Box3().setFromObject(mesh);
+      return box;
+    }
+
+    // --- Cargar modelo (player) ---
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://unpkg.com/three@0.152.2/examples/js/libs/draco/'); // opcional, no crítico
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(dracoLoader);
+
+    loader.load(MODEL_URL, (gltf) => {
+      modelTemplate = gltf.scene;
+      modelTemplate.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+      modelTemplate.scale.setScalar(0.01); // el modelo de ejemplo es grande — reescalamos
+      initPlayer();
+      // Crear tráfico inicial
+      for (let i = 0; i < 8; i++) spawnTraffic( - (i*20 + 40) );
+    }, (xhr) => {
+      // progress (opcional)
+      // console.log((xhr.loaded / xhr.total * 100).toFixed(0) + '% cargado');
+    }, (err) => {
+      console.error('Error cargando GLB:', err);
+      // si falla, creamos un placeholder rectangular
+      modelTemplate = null;
+      createPlaceholderPlayer();
+      for (let i = 0; i < 8; i++) spawnTraffic( - (i*20 + 40) );
+    });
+
+    // Si falla la carga, placeholder simple
+    function createPlaceholderPlayer() {
+      const geom = new THREE.BoxGeometry(2, 1, 4);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+      player = new THREE.Mesh(geom, mat);
+      player.position.set(0, 0.5, 6);
+      player.castShadow = true;
+      scene.add(player);
+      playerBBox = computeBBox(player);
+    }
+
+    function initPlayer() {
+      // clonamos el template para el jugador
+      player = modelTemplate.clone(true);
+      player.scale.setScalar(0.01);
+      player.position.set(0, 0, 6);
+      player.rotation.y = Math.PI; // orientar hacia la cámara
+      scene.add(player);
+      playerBBox = computeBBox(player);
+    }
+
+    // --- Spawning tráfico ---
+    function spawnTraffic(z = -40) {
+      // si tenemos modelo, clonamos y recoloreamos; si no, caja
+      let mesh;
+      if (modelTemplate) {
+        mesh = modelTemplate.clone(true);
+        mesh.scale.setScalar(0.01);
+        // girar para que apunte hacia la cámara (tráfico viene hacia nosotros con la parte frontal)
+        mesh.rotation.y = Math.PI; 
+        // color aleatorio
+        mesh.traverse((c) => {
+          if (c.isMesh && c.material && c.material.color) {
+            c.material = c.material.clone();
+            const tint = new THREE.Color().setHSL(Math.random(), 0.6, 0.5);
+            c.material.color.lerp(tint, 0.6);
+          }
+        });
+      } else {
+        const geom = new THREE.BoxGeometry(2,1,4);
+        const mat = new THREE.MeshStandardMaterial({ color: Math.random()*0xffffff });
+        mesh = new THREE.Mesh(geom, mat);
+      }
+      // elegir carril aleatorio (pero intentar variar)
+      const lane = lanes[Math.floor(Math.random() * lanes.length)];
+      mesh.position.set(lane, 0, z);
+      mesh.castShadow = true;
+      scene.add(mesh);
+      const bbox = computeBBox(mesh);
+      traffic.push({ mesh, bbox, lane });
+    }
+
+    // Reciclar tráfico que pasa la cámara
+    function recycleTraffic() {
+      for (let i = traffic.length - 1; i >= 0; i--) {
+        const t = traffic[i];
+        if (t.mesh.position.z > 20) {
+          // removemos
+          scene.remove(t.mesh);
+          traffic.splice(i,1);
+          // añadimos uno nuevo más lejos
+          spawnTraffic( -120 + Math.random()*-40 );
+          // sumar puntos por esquivar
+          score += 10;
+          scoreEl.innerText = score;
+        }
+      }
+    }
+
+    // Movimiento lateral suave del jugador
+    function updatePlayer(delta) {
+      const moveSpeed = 8; // unidades/s
+      let targetX = player.position.x;
+      if (input.left) targetX -= 6 * delta;
+      if (input.right) targetX += 6 * delta;
+      // limitar a los bordes
+      const maxX = roadWidth/2 - 0.8;
+      targetX = Math.max(-maxX, Math.min(maxX, targetX));
+      // lerp (suavizado)
+      player.position.x += (targetX - player.position.x) * 8 * delta;
+      // actualizar bbox
+      playerBBox = computeBBox(player);
+    }
+
+    // Detección de colisiones sencilla con Box3
+    function checkCollisions() {
+      for (let i = 0; i < traffic.length; i++) {
+        const t = traffic[i];
+        t.bbox = computeBBox(t.mesh);
+        if (t.bbox.intersectsBox(playerBBox)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // --- Animación principal ---
+    let lastTime = performance.now();
+    function animate(now) {
+      const delta = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+      if (running) {
+        // Mover tráfico hacia la cámara
+        for (const t of traffic) {
+          t.mesh.position.z += speed * (1 + (Math.abs(t.lane || 0) * 0.02)) * (delta*60/16);
+        }
+        // Mover líneas de la carretera para dar sensación de avance
+        for (const l of lines) {
+          l.position.z += speed * 0.6 * (delta*60/16);
+          if (l.position.z > 30) l.position.z = -120;
+        }
+
+        // Actualizar jugador
+        if (player) updatePlayer(delta);
+
+        // Recycle tráfico y puntuar
+        recycleTraffic();
+
+        // Colisiones
+        if (playerBBox && checkCollisions()) {
+          running = false;
+          // efecto simple de choque: oscurecer y mostrar puntaje
+          console.log('Crash! Puntaje:', score);
+          flashGameOver();
+        }
+
+        // Aumenta dificultad con el tiempo
+        speed += 0.0007;
+      } // end running
+
+      // cámara: sigue ligeramente al jugador
+      camera.position.x += (player.position.x - camera.position.x) * 0.08;
+      camera.lookAt(new THREE.Vector3(player.position.x, 1.5, 0));
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+    requestAnimationFrame(animate);
+
+    // --- Efecto Game Over ---
+    function flashGameOver() {
+      const overlay = document.createElement('div');
+      overlay.style.position = 'absolute';
+      overlay.style.left = '0'; overlay.style.top = '0'; overlay.style.right = '0'; overlay.style.bottom = '0';
+      overlay.style.display = 'flex'; overlay.style.justifyContent = 'center'; overlay.style.alignItems = 'center';
+      overlay.style.background = 'rgba(0,0,0,0.6)';
+      overlay.style.color = '#fff'; overlay.style.fontSize = '34px'; overlay.style.zIndex = 50;
+      overlay.innerHTML = `<div style="text-align:center">
+        <div style="font-weight:700;margin-bottom:8px">¡CHOCASTE!</div>
+        <div>Puntuación final: <b>${score}</b></div>
+        <div style="font-size:14px;margin-top:10px">Pulsa Reiniciar o Barra espaciadora</div>
+      </div>`;
+      document.body.appendChild(overlay);
+      // quitar overlay al reiniciar
+      restartBtn.dataset.overlayId = 'gameover-overlay';
+      restartBtn.onclick = () => {
+        document.body.removeChild(overlay);
+        resetGame();
+      };
+    }
+
+    // --- Reiniciar ---
+    function resetGame() {
+      // limpiar tráfico
+      for (const t of traffic) {
+        scene.remove(t.mesh);
+      }
+      traffic.length = 0;
+      // reset player pos
+      if (player) player.position.set(0,0,6);
+      score = 0;
+      scoreEl.innerText = score;
+      speed = 0.6;
+      running = true;
+      // crear tráfico inicial
+      for (let i = 0; i < 8; i++) spawnTraffic( - (i*20 + 40) );
+    }
+
+    // --- Gestión de tamaño ---
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    // --- Ayuda: click para mover cámara (opcional) ---
+    // const controls = new OrbitControls(camera, renderer.domElement);
+    // controls.enablePan = false;
+    // controls.enableZoom = false;
+    // controls.target.set(0,1,0);
+
+  </script>
+</body>
+</html>
