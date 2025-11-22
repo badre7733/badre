@@ -1,105 +1,137 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <title>Traffic Racer 3D</title>
-    <style>
-        body { margin: 0; overflow: hidden; background: #111; }
-    </style>
+<meta charset="UTF-8">
+<title>Traffic Racer Simple</title>
+<style>
+body { margin: 0; overflow: hidden; background: #111; font-family: Arial; }
+#hud { position: absolute; top: 10px; left: 10px; color: #fff; font-size: 18px; z-index: 10; }
+button { position: absolute; bottom: 20px; font-size: 20px; padding: 10px; z-index: 10; }
+#left { left: 20px; } #right { right: 20px; }
+#gameover { display:none; position:absolute; inset:0; justify-content:center; align-items:center; background: rgba(0,0,0,0.6); z-index: 20; color:#fff; font-size:24px; }
+</style>
 </head>
 <body>
 
+<div id="hud">Puntos: <span id="score">0</span></div>
+<button id="left">⟵</button>
+<button id="right">⟶</button>
+<div id="gameover">¡CHOCASTE!<br>Puntuación: <span id="finalScore">0</span><br><button id="restart">Reintentar</button></div>
+
 <script type="module">
-
 import * as THREE from "https://unpkg.com/three@0.159.0/build/three.module.js";
-import { GLTFLoader } from "https://unpkg.com/three@0.159.0/examples/jsm/loaders/GLTFLoader.js";
 
-let scene, camera, renderer;
-let car;
+let scene = new THREE.Scene();
+scene.background = new THREE.Color(0x222222);
+
+let camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.set(0,5,-12);
+camera.lookAt(0,0,0);
+
+let renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Luz
+let light = new THREE.DirectionalLight(0xffffff,1.5);
+light.position.set(5,10,-5);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff,0.6));
+
+// Carretera
+let road = new THREE.Mesh(new THREE.PlaneGeometry(6,2000), new THREE.MeshStandardMaterial({color:0x303030}));
+road.rotation.x = -Math.PI/2;
+scene.add(road);
+
+// Player
+let player = new THREE.Mesh(new THREE.BoxGeometry(2,1,4), new THREE.MeshStandardMaterial({color:0xff3333}));
+player.position.y = 0.5;
+scene.add(player);
+let playerTargetX = 0;
+
+// Obstáculos
 let obstacles = [];
+for(let i=0;i<10;i++){
+  let obs = new THREE.Mesh(new THREE.BoxGeometry(1,1,2), new THREE.MeshStandardMaterial({color:0xff0000}));
+  obs.position.set((Math.random()*4)-2,0.5,-50-i*40);
+  scene.add(obs);
+  obstacles.push(obs);
+}
+
+// Variables juego
 let speed = 0.2;
-let carX = 0;
+let score = 0;
+let running = true;
+const scoreEl = document.getElementById("score");
+const gameoverEl = document.getElementById("gameover");
+const finalScoreEl = document.getElementById("finalScore");
 
-init();
+// Controles
+document.getElementById("left").addEventListener("click",()=>{playerTargetX-=2;});
+document.getElementById("right").addEventListener("click",()=>{playerTargetX+=2;});
+window.addEventListener("keydown",(e)=>{
+  if(e.key=="ArrowLeft"||e.key=="a") playerTargetX-=2;
+  if(e.key=="ArrowRight"||e.key=="d") playerTargetX+=2;
+  if(e.code=="Space") restart();
+});
+
+// Resize
+window.addEventListener("resize",()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+});
+
+// Función reinicio
+function restart(){
+  player.position.x=0; playerTargetX=0;
+  score=0; scoreEl.textContent=score;
+  running=true; gameoverEl.style.display="none";
+  for(let i=0;i<obstacles.length;i++){
+    obstacles[i].position.set((Math.random()*4)-2,0.5,-50-i*40);
+  }
+}
+
+// Detectar colisiones simple
+function checkCollision(){
+  const playerBox = new THREE.Box3().setFromObject(player);
+  for(let obs of obstacles){
+    const obsBox = new THREE.Box3().setFromObject(obs);
+    if(playerBox.intersectsBox(obsBox)) return true;
+  }
+  return false;
+}
+
+// Loop
+function animate(){
+  requestAnimationFrame(animate);
+  if(running){
+    // Mover carretera
+    road.position.z += speed;
+    if(road.position.z>50) road.position.z=0;
+    // Mover obstáculos
+    for(let obs of obstacles){
+      obs.position.z+=speed+0.1;
+      if(obs.position.z>5){
+        obs.position.z=-200;
+        obs.position.x=(Math.random()*4)-2;
+        score+=10; scoreEl.textContent=score;
+      }
+    }
+    // Mover player suavemente
+    playerTargetX = Math.max(-2.5, Math.min(2.5, playerTargetX));
+    player.position.x += (playerTargetX - player.position.x)*0.2;
+    // Colisión
+    if(checkCollision()){ running=false; finalScoreEl.textContent=score; gameoverEl.style.display="flex"; }
+  }
+  // Cámara sigue player
+  camera.position.x += (player.position.x - camera.position.x)*0.08;
+  camera.position.z = player.position.z - 12;
+  camera.lookAt(new THREE.Vector3(player.position.x,0.5,player.position.z+8));
+  renderer.render(scene,camera);
+}
 animate();
-
-function init() {
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x222222);
-
-    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 5, -12);
-    camera.lookAt(0, 0, 0);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
-
-    const light = new THREE.DirectionalLight(0xffffff, 2);
-    light.position.set(5, 10, -5);
-    scene.add(light);
-
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-
-    // Carretera
-    const roadGeo = new THREE.PlaneGeometry(6, 2000);
-    const roadMat = new THREE.MeshStandardMaterial({ color: 0x303030 });
-    const road = new THREE.Mesh(roadGeo, roadMat);
-    road.rotation.x = -Math.PI / 2;
-    scene.add(road);
-
-    // Cargar coche
-    const loader = new GLTFLoader();
-    loader.load(
-        "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/SimpleCar/glTF/SimpleCar.gltf",
-        (gltf) => {
-            car = gltf.scene;
-            car.scale.set(0.9, 0.9, 0.9);
-            car.position.set(0, 0.4, 0);
-            scene.add(car);
-        }
-    );
-
-    // Obstáculos
-    for (let i = 0; i < 10; i++) {
-        const box = new THREE.Mesh(
-            new THREE.BoxGeometry(1, 1, 2),
-            new THREE.MeshStandardMaterial({ color: 0xff0000 })
-        );
-        box.position.set((Math.random()*4)-2, 0.5, -50 - i*40);
-        scene.add(box);
-        obstacles.push(box);
-    }
-
-    // Teclado
-    window.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowLeft" || e.key === "a") carX -= 0.3;
-        if (e.key === "ArrowRight" || e.key === "d") carX += 0.3;
-    });
-
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-
-    if (car) {
-        carX = THREE.MathUtils.clamp(carX, -2.2, 2.2);
-        car.position.x += (carX - car.position.x) * 0.2;
-    }
-
-    // Obstáculos
-    for (let obs of obstacles) {
-        obs.position.z += speed + 0.1;
-        if (obs.position.z > 5) {
-            obs.position.z = -200;
-            obs.position.x = (Math.random()*4)-2;
-        }
-    }
-
-    renderer.render(scene, camera);
-}
-
+document.getElementById("restart").addEventListener("click",restart);
 </script>
 
 </body>
